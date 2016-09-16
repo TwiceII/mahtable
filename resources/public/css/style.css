@@ -1,3 +1,29 @@
+body {
+  font: 12px 'Segoe UI', Helvetica, 'Droid Sans', Tahoma, Geneva, sans-serif;
+}
+
 h1 {
   text-decoration: underline;
 }
+
+
+/* .fht-thead > .fht-table > thead > tr > th {
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 6px 5px;
+  border: 1px Solid #c0c0c0;
+  background-color: #f5f5f5;
+  overflow: hidden;
+  font-weight: normal;
+  text-align: left;
+}
+
+.fht-tbody > .fht-table > tbody > tr > td {
+  overflow: hidden;
+  border-bottom: 1px Solid #ddd;
+  border-right: 1px Solid #ddd;
+  border-top-width: 0;
+  border-left-width: 0;
+  padding: 3px 6px 4px;
+}
+ */

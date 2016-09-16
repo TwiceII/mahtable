@@ -1,0 +1,85 @@
+
+/* .fancyDarkTable .numeric {
+text-align: right;
+}
+
+.fancyDarkTable td, .fancyDarkTable th {
+overflow: hidden;
+padding: 6px;
+}
+
+.fancyDarkTable thead tr th {
+padding: 4px 6px 5px 6px;
+border: 1px Solid #c0c0c0;
+}
+
+.fancyDarkTable {
+
+}
+
+.fancyDarkTable tbody tr td {
+border-bottom: 1px Solid #ddd;
+border-right: 1px Solid #ddd;
+border-top-width: 0;
+
+border-left: 1px Solid #ddd;
+padding: 3px 6px 4px;
+}
+
+
+.fancyDarkTable thead tr th,
+.fancyDarkTable tfoot tr td {
+cursor: pointer;
+white-space: nowrap;
+
+background-color: #f5f5f5;
+font-weight: normal;
+text-align: left;
+}
+
+
+.fancyDarkTable .fht-head {
+z-index: 1;
+position: relative;
+}
+*/
+
+
+#tablePlaceholder {
+  height: 350px;
+  overflow-y: scroll;
+
+}
+
+table {
+  width: 100%;
+  border-left: 1px Solid #c0c0c0;
+}
+
+th {
+ cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 6px 5px;
+  border: 1px Solid #c0c0c0;
+  border-left-width: 0;
+  background-color: #f5f5f5;
+  overflow: hidden;
+  font-weight: normal;
+  text-align: left;
+}
+
+th:first {
+  border-left: 1px Solid #c0c0c0;
+}
+
+td {
+  overflow: hidden;
+  border-bottom: 1px Solid #ddd;
+  border-right: 1px Solid #ddd;
+  border-top-width: 0;
+  border-left-width: 0;
+  padding: 3px 6px 4px;
+}
+
+
+

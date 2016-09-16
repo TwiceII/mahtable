@@ -1,18 +1,17 @@
 (ns mahtable.core
-  (:require [om.core :as om :include-macros true]
-            [om.dom :as dom :include-macros true]))
+  (:require [rum.core :as rum]))
 
 (enable-console-print!)
 
-(defonce app-state (atom {:text "Hello Chestnut!"}))
+(println "hey hey")
 
-(defn root-component [app owner]
-  (reify
-    om/IRender
-    (render [_]
-      (dom/div nil (dom/h1 nil (:text app))))))
+(-> "table"
+    js/$
+    (.floatThead #js {:scrollContainer #(-> (js/$ "#tablePlaceholder"))}))
 
-(om/root
- root-component
- app-state
- {:target (js/document.getElementById "app")})
+
+;; (-> "#tablePlaceholder table"
+;;     js/$
+;;     (.fixedHeaderTable #js {:height "400" :themeClass "fancyDarkTable"}))
+
+;$('#tablePlaceholder table').fixedHeaderTable({ height: '400', altClass: 'odd', themeClass: 'fancyDarkTable' });
