@@ -7,37 +7,49 @@
 
 (def default-sort-type :asc)
 
-(defn column->col-filter
+(defn column->init-col-filter
   [column]
   (case (:field-type column)
-    :text {:filter-type :text
+    :text {:col-index (:index column)
+           :field-name (:field-name column)
+           :filter-type :text
            :search-str nil}
-    :numeric {:filter-type :numeric
+    :numeric {:col-index (:index column)
+              :field-name (:field-name column)
+              :filter-type :numeric
               :search-str nil
               :filter-cond nil}))
 
-(def columns [{:name "Бренд" :width 10
+(def columns [{:index 1
+               :name "Бренд" :width 10
                :field-name :brand
                :field-type :text }
-              {:name "Товар" :width 15
+              {:index 2
+               :name "Товар" :width 15
                :field-name :good
                :field-type :text }
-              {:name "Продажи (тг)" :width 13
+              {:index 3
+               :name "Продажи (тг)" :width 13
                :field-name :salesSum
                :field-type :numeric }
-              {:name "Продажи (шт)" :width 13
+              {:index 4
+               :name "Продажи (шт)" :width 13
                :field-name :salesAmount
                :field-type :numeric }
-              {:name "Маржа (тг)" :width 12
+              {:index 5
+               :name "Маржа (тг)" :width 12
                :field-name :margin
                :field-type :numeric }
-              {:name "ТМЗ (тг)" :width 12
+              {:index 6
+               :name "ТМЗ (тг)" :width 12
                :field-name :tmzSales
                :field-type :numeric }
-              {:name "ТМЗ (шт)" :width 10
+              {:index 7
+               :name "ТМЗ (шт)" :width 10
                :field-name :tmzAmount
                :field-type :numeric }
-              {:name "% от общей прибыли" :width 15
+              {:index 8
+               :name "% от общей прибыли" :width 15
                :field-name :salesPercent
                :field-type :numeric }])
 
@@ -48,7 +60,7 @@
                       :sort-params {:sort-column nil
                                     :sort-type default-sort-type}
 
-                      :col-filters (map column->col-filter columns)
+                      :active-col-filters {}
                       }))
 
 
@@ -87,8 +99,9 @@
              (sort-rows! new-s)))
 
 (defn random-row
-  []
-  {:brand (str "масло " (rand-int 100))
+  [row-number]
+  {:id row-number
+   :brand (str "масло " (rand-int 100))
    :good (str "масло Sunar" (rand-int 100))
    :salesSum (rand-int 10000000)
    :salesAmount (rand-int 10000)
@@ -123,6 +136,17 @@
     (reset! sort-cursor {:sort-column column
                          :sort-type new-sort-type})))
 
+(defn click-numeric-filter
+  [f-cond column]
+  (swap! (rum/cursor-in app-state [:active-col-filters])
+         #(assoc % (:index column) (assoc (column->init-col-filter column)
+                                     :filter-cond f-cond)))
+  (println @(rum/cursor-in app-state [:active-col-filters])))
+
+(def click-gt-filter (partial click-numeric-filter :gt))
+(def click-lt-filter (partial click-numeric-filter :lt))
+
+;;; =======================================
 (rum/defc header-th-view
   [column sort? sort-type]
   [:th
@@ -139,16 +163,21 @@
 
 (rum/defc header-filter-th-view
   "Строка для фильтров в заголовке"
-  [col-filter]
+  [column active-col-filter]
   [:th.filter-th
-;;    (case (:filter-type col-filter)
-;;      :numeric "="
-;;      :text "<>")
    [:div.ui.fluid.labeled.input
-    [:div.ui.basic.label.filter-btn
-    (case (:filter-type col-filter)
-     :numeric "="
-     :text "<>")]
+    [:div.ui.dropdown.icon.label.filter-btn
+     (if active-col-filter
+      (if (= (:filter-type active-col-filter) :numeric)
+        (if (= (:filter-cond active-col-filter) :gt) ">" "<")
+        [:i.checkmark.icon])
+       [:i.filter.icon])
+     [:div.menu
+      [:div.item {:on-click #(click-gt-filter column)}
+       "больше чем"]
+      [:div.item {:on-click #(click-lt-filter column)}
+       "меньше чем"]]]
+
     [:input {:type "text"
              :class "filter-input"
              :style {:text-align "right"}
@@ -167,7 +196,7 @@
 (rum/defc row-view
   [row columns]
   [:tr
-   (map #(row-td-view row %)
+   (map #(rum/with-key (row-td-view row %) (:index %))
         columns)])
 
 
@@ -178,10 +207,12 @@
   [:div.table-body-div
    [:table {:cellSpacing 0}
     [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}}])
+     (map #(-> [:col {:style {:width (str (:width %) "%")}
+                      :key (:index %)
+                      }])
           columns)]
     [:tbody
-     (map #(row-view % columns) rows)]]])
+     (map #(rum/with-key (row-view % columns) (:id %)) rows)]]])
 
 
 (rum/defc footer-part-view
@@ -189,7 +220,8 @@
   [:div.table-footer-div
    [:table {:cellSpacing 0}
     [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}}])
+     (map #(-> [:col {:style {:width (str (:width %) "%")}
+                      :key (:index %)}])
           columns)]
     [:tbody
      [:tr
@@ -206,22 +238,26 @@
 (rum/defc header-part-view
   "Заголовок таблицы с названиями столбцов,
    сортировкой и фильтрами"
-  [columns col-filters sort-params]
+  [columns active-col-filters sort-params]
   [:div.table-header-div
    [:table {:cellSpacing 0}
     [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}}])
+     (map #(-> [:col {:style {:width (str (:width %) "%")}
+                      :key (:index %)}])
           columns)]
     [:thead
      ;; заголовок с сортировкой
      [:tr
-      (map #(header-th-view %
+      (map #(rum/with-key (header-th-view %
                             (= % (:sort-column sort-params))
-                            (:sort-type sort-params))
+                            (:sort-type sort-params)) (:index %))
            columns)]
      ;; фильтры
      [:tr
-      (map header-filter-th-view col-filters)]]]])
+      (map #(rum/with-key
+              (header-filter-th-view % (get active-col-filters (:index %)))
+              (:index %))
+           columns)]]]])
 
 
 (rum/defc mahtable-view < rum/reactive {:after-render (fn[state]
@@ -230,11 +266,11 @@
   [appstate]
   (let [columns (:columns (rum/react appstate))
         rows (:rows (rum/react appstate))
-        sort-params (:sort-params (rum/react appstate))
-        col-filters (:col-filters (rum/react appstate))]
+        active-col-filters (:active-col-filters (rum/react appstate))
+        sort-params (:sort-params (rum/react appstate))]
     [:div#table-div
 
-    (header-part-view columns col-filters sort-params)
+    (header-part-view columns active-col-filters sort-params)
 
     (body-part-view columns rows)
 
@@ -244,7 +280,7 @@
 (defn init
   []
   (let [rand-rows (for [x (range 100)]
-                    (random-row))]
+                    (random-row x))]
     (reset! (rum/cursor-in app-state [:rows]) rand-rows)
     (rum/mount (mahtable-view app-state)
                (.getElementById js/document "table-div"))))

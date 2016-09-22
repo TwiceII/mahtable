@@ -29,7 +29,6 @@
         $(".table-body-div > table > tbody > tr:first-child > td").each(function () {
           mWid = $(this).width();
           arrOfTable1.push(mWid);
-          console.log(mWid);
         });
         $('.table-header-div > table > thead > tr:first-child > th').each(function() {
           $(this).css("min-width",arrOfTable1[i]+"px");
@@ -43,6 +42,7 @@
       };
       $(function () {
         //alignHeaderWidths();
+        $(".dropdown").dropdown();
       });
     </script>
     <script src="js/compiled/mahtable.js" type="text/javascript"></script>

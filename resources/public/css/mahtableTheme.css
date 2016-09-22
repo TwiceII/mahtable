@@ -21,7 +21,7 @@
   border-right: 1px Solid #c0c0c0;
   border-top: 1px solid #c0c0c0;
   background-color: #f5f5f5;
-  overflow: hidden;
+/*   overflow: hidden; */
   font-weight: normal;
   text-align: left;
   box-sizing: content-box;
@@ -81,6 +81,19 @@ td {
   padding: 3px 5px;
   border-radius: 0px;
   background-color: #f5f5f5;
+  border: 1px Solid #ddd;
+}
+
+.ui.label.filter-btn > .icon {
+  margin-right: 5px;
+}
+
+.ui.label.filter-btn > .menu.transition {
+  border-radius: 0px;
+}
+
+.ui.label.filter-btn > .menu.transition > .item {
+  padding: 10px 10px !important;
 }
 
 .ui.input .filter-input {
