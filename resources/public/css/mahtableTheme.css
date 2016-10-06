@@ -38,6 +38,13 @@
   border-top: none;
   border-bottom: none;
 }
+
+.table-body-div.disabled {
+  /*background: #eee;*/
+  color: #ccc !important;
+  /*overflow-y: hidden;*/
+}
+
 .table-body-div > table {
   width: 100%;
   border-collapse: separate;
@@ -78,6 +85,7 @@ td {
 
 /*------------------------------------------*/
 .ui.input > .ui.label.filter-btn {
+  min-width: 12px;
   padding: 3px 5px;
   border-radius: 0px;
   background-color: #f5f5f5;
@@ -85,7 +93,7 @@ td {
 }
 
 .ui.label.filter-btn > .icon {
-  margin-right: 5px;
+  margin-right: 0px;
 }
 
 .ui.label.filter-btn > .menu.transition {
@@ -93,7 +101,7 @@ td {
 }
 
 .ui.label.filter-btn > .menu.transition > .item {
-  padding: 10px 10px !important;
+  padding: 8px 10px !important;
 }
 
 .ui.input .filter-input {
@@ -101,3 +109,9 @@ td {
   border-radius: 0px;
 }
 
+
+
+
+.load-cl {
+  background-color: red;
+}

@@ -1,5 +1,9 @@
 (ns mahtable.core
-  (:require [rum.core :as rum]))
+  (:require [mahtable.utils :as u]
+            [mahtable.dom-utils :as dom]
+            [cljs.core.async :as a]
+            [rum.core :as rum])
+  (:require-macros [cljs.core.async.macros :as am]))
 
 (enable-console-print!)
 
@@ -8,6 +12,7 @@
 (def default-sort-type :asc)
 
 (defn column->init-col-filter
+  "Получить начальные параметры фильтра для столбца"
   [column]
   (case (:field-type column)
     :text {:col-index (:index column)
@@ -20,6 +25,7 @@
               :search-str nil
               :filter-cond nil}))
 
+;;; настройки столбцов
 (def columns [{:index 1
                :name "Бренд" :width 10
                :field-name :brand
@@ -53,15 +59,73 @@
                :field-name :salesPercent
                :field-type :numeric }])
 
+;;; изначальный список строк
+(def init-rows (atom []))
+
+
+
+;;; состояние всей таблицы
 (defonce app-state (atom
                      {:columns columns
+                      ;; показываемый список строк (с фильтрами, сортировкой и т.д)
                       :rows []
 
+                      ;; список настроек по сортировкам
                       :sort-params {:sort-column nil
                                     :sort-type default-sort-type}
 
+                      ;; параметры по включенным фильтрам для столбцов
                       :active-col-filters {}
+
+                      ;; признак загрузки
+                      ;:loading? false
+
+                      :test {:shmest 47}
                       }))
+
+(defonce other-state (atom {:loading? false}))
+
+(defn app-cursor
+  [& path]
+  (rum/cursor-in app-state (into [] path)))
+
+
+(defn other-cursor
+  [& path]
+  (rum/cursor-in other-state (into [] path)))
+
+(defn loading-on!
+  []
+  (println "loading-on!")
+  (reset! (other-cursor :loading?) true))
+;;   (reset! (rum/cursor-in app-state [:loading?]) true))
+
+
+(defn loading-off!
+  []
+  (println "loading-off!")
+;;   (reset! (rum/cursor-in app-state [:loading?]) false)
+  (js/setTimeout
+    #(reset! (other-cursor :loading?) false)
+
+                 2000)
+  )
+
+
+(def load-ch (a/chan))
+
+(am/go (while true
+         (let [ready? (a/<! load-ch)]
+           (println "load-ch incoming!")
+           (when (and ready?
+                      (= true @(other-cursor :loading?)))
+             (loading-off!)))))
+
+(defn notify-loaded
+  []
+  (println "!!! notify-loaded !!!")
+  ;(am/go (a/>! load-ch true))
+  )
 
 
 
@@ -69,12 +133,18 @@
 
 (defn get-sorted-rows
   [rows field-name field-type sort-type]
-  (let [sort-func (if (= field-type :numeric)
-                    (if (= sort-type :asc)
-                      > <)
-                    (if (= sort-type :asc)
-                      #(compare %1 %2) #(compare %2 %1)))]
-    (sort-by field-name sort-func rows)))
+  ;; если есть все поля
+  (if (and field-name
+           field-type
+           sort-type)
+    (let [sort-func (if (= field-type :numeric)
+                      (if (= sort-type :asc)
+                        > <)
+                      (if (= sort-type :asc)
+                        #(compare %1 %2) #(compare %2 %1)))]
+      (sort-by field-name sort-func rows))
+    ;; иначе не сортируем
+    rows))
 
 
 (defn sort-rows!
@@ -90,13 +160,66 @@
     (reset! rows-cursor sorted-rows)))
 
 
+(defn filter-rows-numeric
+  [rows filter-cond field-name value]
+  (filter #((case filter-cond ; получаем оператор сравнения
+              :gt >
+              :lt <)
+            (get % field-name) ; зн-ие поля
+            value)
+          rows))
+
+
+(defn filter-rows!
+  [filter-params]
+  (println "filter-rows!")
+  (let [init-rows @init-rows
+        filtered-rows (if (u/nil-or-empty? filter-params)
+                        init-rows
+                        (reduce-kv (fn [rows flt-index flt-params]
+                                     (-> rows
+                                         (#(if (:search-str flt-params)
+                                             (filter-rows-numeric %
+                                                                  (:filter-cond flt-params)
+                                                                  (:field-name flt-params)
+                                                                  (:search-str flt-params))
+                                             %))))
+                                   init-rows
+                                   filter-params))]
+    (reset! (rum/cursor-in app-state [:rows]) filtered-rows)))
+
+
+(defn sort-m
+  [s]
+  (loading-on!)
+  (sort-rows! s))
+
+;;; для сортировок
 (add-watch (rum/cursor-in app-state [:sort-params])
            :sort-watcher
            (fn [k a old-s new-s]
-             (println "watch sort-params")
-             (println old-s)
+;;              (loading-on!)
+;;              (sort-rows! new-s)
+             (sort-m new-s)
+             ;(loading-off!)
+             ))
+
+;;; для фильтров
+(add-watch (rum/cursor-in app-state [:active-col-filters])
+           :filters-watcher
+           (fn [k a old-s new-s]
+             (println ":filters-watcher")
              (println new-s)
-             (sort-rows! new-s)))
+             (when (or (some #(not (nil? (get-in % [1 :search-str]))) new-s)
+                       (u/nil-or-empty? new-s))
+               (loading-on!)
+               ;; фильтруем
+               (filter-rows! new-s)
+               ;; заодно сортируем
+               (sort-rows! @(rum/cursor-in app-state [:sort-params]))
+               ;(loading-off!)
+             )))
+
 
 (defn random-row
   [row-number]
@@ -136,15 +259,42 @@
     (reset! sort-cursor {:sort-column column
                          :sort-type new-sort-type})))
 
+
 (defn click-numeric-filter
-  [f-cond column]
+  "При щелчке по фильтру для числовых значений"
+  [f-cond column prev-filter]
   (swap! (rum/cursor-in app-state [:active-col-filters])
-         #(assoc % (:index column) (assoc (column->init-col-filter column)
-                                     :filter-cond f-cond)))
-  (println @(rum/cursor-in app-state [:active-col-filters])))
+         ;; если фильтр какой-то уже стоит на столбце
+         #(if prev-filter
+            ;; изменяем только одно поле
+            (assoc-in % [(:index column) :filter-cond] f-cond)
+            ;; иначе создаем первоначальную инфу по фильтру
+            (assoc % (:index column)
+              (assoc (column->init-col-filter column)
+                                     :filter-cond f-cond))))
+;;   (println @(rum/cursor-in app-state [:active-col-filters]))
+  )
 
 (def click-gt-filter (partial click-numeric-filter :gt))
 (def click-lt-filter (partial click-numeric-filter :lt))
+
+
+(defn click-off-filter
+  "Отключить фильтр для столбца"
+  [column]
+  (swap! (rum/cursor-in app-state [:active-col-filters])
+         #(dissoc % (:index column)))
+;;   (println @(rum/cursor-in app-state [:active-col-filters]))
+  )
+
+
+(defn change-col-filter-search-str
+  [column value]
+  (println "change-col-filter-search-str " value)
+  (swap! (rum/cursor-in app-state [:active-col-filters])
+         #(assoc-in % [(:index column) :search-str] value))
+;;   (println @(rum/cursor-in app-state [:active-col-filters]))
+  )
 
 ;;; =======================================
 (rum/defc header-th-view
@@ -161,7 +311,7 @@
    ])
 
 
-(rum/defc header-filter-th-view
+(rum/defc header-filter-th-view < rum/reactive
   "Строка для фильтров в заголовке"
   [column active-col-filter]
   [:th.filter-th
@@ -173,14 +323,27 @@
         [:i.checkmark.icon])
        [:i.filter.icon])
      [:div.menu
-      [:div.item {:on-click #(click-gt-filter column)}
+      [:div.item {:class (if (and (= (:filter-type active-col-filter) :numeric)
+                                  (= (:filter-cond active-col-filter) :gt))
+                           "active")
+                  :on-click #(click-gt-filter column active-col-filter)}
        "больше чем"]
-      [:div.item {:on-click #(click-lt-filter column)}
-       "меньше чем"]]]
+      [:div.item {:class (if (and (= (:filter-type active-col-filter) :numeric)
+                                  (= (:filter-cond active-col-filter) :lt))
+                           "active")
+                  :on-click #(click-lt-filter column active-col-filter)}
+       "меньше чем"]
+      [:div.item {:class (if-not active-col-filter "active")
+                  :on-click #(click-off-filter column)}
+       "отключить"]]]
 
     [:input {:type "text"
              :class "filter-input"
+             :disabled (nil? active-col-filter)
              :style {:text-align "right"}
+             :value (u/value-or-empty-str (:search-str active-col-filter))
+             :on-change #(change-col-filter-search-str column
+                                                       (dom/target-value %))
              }]]])
 
 
@@ -200,19 +363,22 @@
         columns)])
 
 
-(rum/defc body-part-view < {:after-render (fn[state]
-                                            (js/moveBodyScrollUp)
-                                            state) }
-  [columns rows]
-  [:div.table-body-div
-   [:table {:cellSpacing 0}
-    [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}
-                      :key (:index %)
-                      }])
-          columns)]
-    [:tbody
-     (map #(rum/with-key (row-view % columns) (:id %)) rows)]]])
+(rum/defc body-part-view < rum/reactive {:after-render (fn[state]
+                                                         (js/moveBodyScrollUp)
+                                                         (notify-loaded)
+                                                         state) }
+  [columns rows-cursor]
+  (println "body-part-view")
+  (let [rows (rum/react rows-cursor)]
+    [:div.table-body-div
+     [:table {:cellSpacing 0}
+      [:colgroup
+       (map #(-> [:col {:style {:width (str (:width %) "%")}
+                        :key (:index %)
+                        }])
+            columns)]
+      [:tbody
+       (map #(rum/with-key (row-view % columns) (:id %)) rows)]]]))
 
 
 (rum/defc footer-part-view
@@ -235,55 +401,81 @@
       [:td]]]]])
 
 
-(rum/defc header-part-view
+(rum/defc header-part-view < rum/reactive
   "Заголовок таблицы с названиями столбцов,
    сортировкой и фильтрами"
-  [columns active-col-filters sort-params]
-  [:div.table-header-div
-   [:table {:cellSpacing 0}
-    [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}
-                      :key (:index %)}])
-          columns)]
-    [:thead
-     ;; заголовок с сортировкой
-     [:tr
-      (map #(rum/with-key (header-th-view %
-                            (= % (:sort-column sort-params))
-                            (:sort-type sort-params)) (:index %))
-           columns)]
-     ;; фильтры
-     [:tr
-      (map #(rum/with-key
-              (header-filter-th-view % (get active-col-filters (:index %)))
-              (:index %))
-           columns)]]]])
+  [columns col-filters-cursor sort-params-cursor]
+  (let [col-filters (rum/react col-filters-cursor)
+        sort-params (rum/react sort-params-cursor)]
+    [:div.table-header-div
+     [:table {:cellSpacing 0}
+      [:colgroup
+       (map #(-> [:col {:style {:width (str (:width %) "%")}
+                        :key (:index %)}])
+            columns)]
+      [:thead
+       ;; заголовок с сортировкой
+       [:tr
+        (map #(rum/with-key (header-th-view %
+                                            (= % (:sort-column sort-params))
+                                            (:sort-type sort-params)) (:index %))
+             columns)]
+       ;; фильтры
+       [:tr
+        (map #(rum/with-key
+                (header-filter-th-view % (get col-filters (:index %)))
+                (:index %))
+             columns)]]]]))
 
 
-(rum/defc mahtable-view < rum/reactive {:after-render (fn[state]
-                                                        (js/alignHeaderWidths)
-                                                        state)}
+(rum/defc mahtable-view < {:after-render (fn[state]
+                                           (js/alignHeaderWidths)
+                                           state)}
   [appstate]
-  (let [columns (:columns (rum/react appstate))
-        rows (:rows (rum/react appstate))
-        active-col-filters (:active-col-filters (rum/react appstate))
-        sort-params (:sort-params (rum/react appstate))]
+  (let [columns (:columns @appstate)]
     [:div#table-div
 
-    (header-part-view columns active-col-filters sort-params)
+    (header-part-view columns
+                      (app-cursor :active-col-filters)
+                      (app-cursor :sort-params))
 
-    (body-part-view columns rows)
+    (body-part-view columns
+                    (app-cursor :rows))
 
     (footer-part-view columns)]))
 
 
+(rum/defc rows-count-view < rum/reactive
+  [rows-cursor]
+  [:div "Всего строк: " (count (rum/react rows-cursor))])
+
+
+(rum/defc loading-label-view < rum/reactive {:after-render (fn[state]
+                                                         (println "dafaq did-update")
+                                                         state) }
+  [loading-cursor]
+  (let [loading? (rum/react loading-cursor)]
+    (println "__________loading-label")
+    (println loading?)
+    (println "__________")
+    [:div
+     {:class (if loading? "load-cl" "")
+      :on-click #(sort-m @(app-cursor :sort-params))}
+     "zzz"]))
+
+
 (defn init
   []
-  (let [rand-rows (for [x (range 100)]
+  (let [rand-rows (for [x (range 1000)]
                     (random-row x))]
-    (reset! (rum/cursor-in app-state [:rows]) rand-rows)
+    (reset! init-rows rand-rows)
+    (reset! (rum/cursor-in app-state [:rows]) @init-rows)
+    (rum/mount (loading-label-view (other-cursor :loading?))
+               (.getElementById js/document "loading-div"))
     (rum/mount (mahtable-view app-state)
-               (.getElementById js/document "table-div"))))
+               (.getElementById js/document "table-div"))
+    (rum/mount (rows-count-view (app-cursor :rows))
+               (.getElementById js/document "rows-count-div"))))
 
 
 (init)
