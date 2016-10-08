@@ -78,38 +78,27 @@
                       :active-col-filters {}
 
                       ;; признак загрузки
-                      ;:loading? false
+                      :loading? false
 
                       :test {:shmest 47}
                       }))
-
-(defonce other-state (atom {:loading? false}))
 
 (defn app-cursor
   [& path]
   (rum/cursor-in app-state (into [] path)))
 
 
-(defn other-cursor
-  [& path]
-  (rum/cursor-in other-state (into [] path)))
 
 (defn loading-on!
   []
   (println "loading-on!")
-  (reset! (other-cursor :loading?) true))
-;;   (reset! (rum/cursor-in app-state [:loading?]) true))
+  (reset! (app-cursor :loading?) true))
 
 
 (defn loading-off!
   []
   (println "loading-off!")
-;;   (reset! (rum/cursor-in app-state [:loading?]) false)
-  (js/setTimeout
-    #(reset! (other-cursor :loading?) false)
-
-                 2000)
-  )
+  (reset! (app-cursor :loading?) false))
 
 
 (def load-ch (a/chan))
@@ -117,15 +106,15 @@
 (am/go (while true
          (let [ready? (a/<! load-ch)]
            (println "load-ch incoming!")
-           (when (and ready?
-                      (= true @(other-cursor :loading?)))
-             (loading-off!)))))
+           (loading-off!))))
+;;            (when (and ready?
+;;                       (= true @(app-cursor :loading?)))
+;;              (loading-off!)))))
 
 (defn notify-loaded
   []
   (println "!!! notify-loaded !!!")
-  ;(am/go (a/>! load-ch true))
-  )
+  (am/go (a/>! load-ch true)))
 
 
 
@@ -189,18 +178,28 @@
     (reset! (rum/cursor-in app-state [:rows]) filtered-rows)))
 
 
-(defn sort-m
-  [s]
+
+(def redraw-table-ch (a/chan))
+
+(am/go (while true
+         (let [redraw-type (a/<! redraw-table-ch)]
+           (println ">>> redraw table")
+           (case redraw-type
+             :sort-redraw (sort-rows! @(app-cursor :sort-params))
+             :filter-redraw (do
+                              (filter-rows! @(app-cursor :active-col-filters))
+                              (sort-rows! @(app-cursor :sort-params)))))))
+
+(defn start-redrawing-table
+  [redraw-type]
   (loading-on!)
-  (sort-rows! s))
+  (am/go (a/>! redraw-table-ch redraw-type)))
 
 ;;; для сортировок
 (add-watch (rum/cursor-in app-state [:sort-params])
            :sort-watcher
            (fn [k a old-s new-s]
-;;              (loading-on!)
-;;              (sort-rows! new-s)
-             (sort-m new-s)
+             (start-redrawing-table :sort-redraw)
              ;(loading-off!)
              ))
 
@@ -212,13 +211,13 @@
              (println new-s)
              (when (or (some #(not (nil? (get-in % [1 :search-str]))) new-s)
                        (u/nil-or-empty? new-s))
-               (loading-on!)
-               ;; фильтруем
-               (filter-rows! new-s)
-               ;; заодно сортируем
-               (sort-rows! @(rum/cursor-in app-state [:sort-params]))
-               ;(loading-off!)
-             )))
+               (start-redrawing-table :filter-redraw))
+;;                ;; фильтруем
+;;                (filter-rows! new-s)
+;;                ;; заодно сортируем
+;;                (sort-rows! @(rum/cursor-in app-state [:sort-params]))
+;;                ;(loading-off!)
+             ))
 
 
 (defn random-row
@@ -458,10 +457,12 @@
     (println "__________loading-label")
     (println loading?)
     (println "__________")
-    [:div
-     {:class (if loading? "load-cl" "")
-      :on-click #(sort-m @(app-cursor :sort-params))}
-     "zzz"]))
+    [:div {:style {:visibility (if loading? "visible" "hidden")}}
+     [:div.ui.active.centered.inline.loader
+      {:style {:margin-bottom "5px"}}]]))
+;;     [:div
+;;      {:class (if loading? "load-cl" "")}
+;;      "zzz"]))
 
 
 (defn init
@@ -470,7 +471,7 @@
                     (random-row x))]
     (reset! init-rows rand-rows)
     (reset! (rum/cursor-in app-state [:rows]) @init-rows)
-    (rum/mount (loading-label-view (other-cursor :loading?))
+    (rum/mount (loading-label-view (app-cursor :loading?))
                (.getElementById js/document "loading-div"))
     (rum/mount (mahtable-view app-state)
                (.getElementById js/document "table-div"))

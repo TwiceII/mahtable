@@ -110,8 +110,7 @@ td {
 }
 
 
-
-
-.load-cl {
-  background-color: red;
+.ui.segment.empty-segment {
+  margin: 0px;
+  padding: 0px;
 }
