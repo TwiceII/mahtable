@@ -80,7 +80,8 @@
                       ;; признак загрузки
                       :loading? false
 
-                      :test {:shmest 47}
+                      ;; id выбранной строки
+                      :selected-row-id nil
                       }))
 
 (defn app-cursor
@@ -102,14 +103,13 @@
 
 
 (def load-ch (a/chan))
-
 (am/go (while true
-         (let [ready? (a/<! load-ch)]
+         (let [table-ready? (a/<! load-ch)]
            (println "load-ch incoming!")
-           (loading-off!))))
-;;            (when (and ready?
-;;                       (= true @(app-cursor :loading?)))
-;;              (loading-off!)))))
+           (when (and table-ready?
+                      (= true @(app-cursor :loading?)))
+             (loading-off!)))))
+
 
 (defn notify-loaded
   []
@@ -117,7 +117,17 @@
   (am/go (a/>! load-ch true)))
 
 
+(defn select-row
+  "Выделить строку по id"
+  [row-id]
+  (println "SELECTED ROW: " row-id)
+  (reset! (app-cursor :selected-row-id) row-id))
 
+(defn deselect-row
+  "Отменить выделение строки"
+  []
+  (println "DESELECTED ROW")
+  (reset! (app-cursor :selected-row-id) nil))
 
 
 (defn get-sorted-rows
@@ -175,6 +185,7 @@
                                              %))))
                                    init-rows
                                    filter-params))]
+    (when (= filtered-rows init-rows) (loading-off!))
     (reset! (rum/cursor-in app-state [:rows]) filtered-rows)))
 
 
@@ -193,6 +204,8 @@
 (defn start-redrawing-table
   [redraw-type]
   (loading-on!)
+  (deselect-row)
+  (js/moveBodyScrollUp)
   (am/go (a/>! redraw-table-ch redraw-type)))
 
 ;;; для сортировок
@@ -295,6 +308,17 @@
 ;;   (println @(rum/cursor-in app-state [:active-col-filters]))
   )
 
+(defn show-filter-popup
+  [evt]
+  (.popup (.popup (js/$. (.-target evt))
+                  (js-obj "popup" (js/$. ".ui.popup")
+                          "hoverable" true
+                          "on" "manual"
+                          "hideOnScroll" false
+                          "exclusive" true
+                          "position" "bottom left"))
+          "show"))
+
 ;;; =======================================
 (rum/defc header-th-view
   [column sort? sort-type]
@@ -310,40 +334,55 @@
    ])
 
 
+(rum/defc numeric-filter-view
+  "Фильтр для числовых значений"
+  [column active-col-filter]
+  [:div.ui.fluid.labeled.input
+   [:div.ui.dropdown.icon.label.filter-btn
+    (if active-col-filter
+      (if (= (:filter-cond active-col-filter) :gt) ">" "<")
+      [:i.filter.icon])
+    [:div.menu
+     [:div.item {:class (if (= (:filter-cond active-col-filter) :gt) "active" "")
+                 :on-click #(click-gt-filter column active-col-filter)}
+      "больше чем"]
+     [:div.item {:class (if (= (:filter-cond active-col-filter) :lt) "active" "")
+                 :on-click #(click-lt-filter column active-col-filter)}
+      "меньше чем"]
+     [:div.item {:class (if-not active-col-filter "active")
+                 :on-click #(click-off-filter column)}
+      "отключить"]]]
+
+   [:input {:type "text"
+            :class "filter-input"
+            :disabled (nil? active-col-filter)
+            :style {:text-align "right"}
+            :value (u/value-or-empty-str (:search-str active-col-filter))
+            :on-change #(change-col-filter-search-str column
+                                                      (dom/target-value %))
+            }]])
+
+(rum/defc text-filter-view
+  "Фильтр для текстовых значений"
+  [column active-col-filter]
+  [:div.ui.fluid.labeled.input
+   [:div.ui.icon.label.filter-btn
+    {:on-click #(show-filter-popup %)}
+    [:i.filter.icon]]
+   [:input {:type "text"
+            :class "filter-input"
+            :value (u/value-or-empty-str (:search-str active-col-filter))
+            :on-change #(println "text " (dom/target-value %))
+            }]])
+
+
 (rum/defc header-filter-th-view < rum/reactive
   "Строка для фильтров в заголовке"
   [column active-col-filter]
   [:th.filter-th
-   [:div.ui.fluid.labeled.input
-    [:div.ui.dropdown.icon.label.filter-btn
-     (if active-col-filter
-      (if (= (:filter-type active-col-filter) :numeric)
-        (if (= (:filter-cond active-col-filter) :gt) ">" "<")
-        [:i.checkmark.icon])
-       [:i.filter.icon])
-     [:div.menu
-      [:div.item {:class (if (and (= (:filter-type active-col-filter) :numeric)
-                                  (= (:filter-cond active-col-filter) :gt))
-                           "active")
-                  :on-click #(click-gt-filter column active-col-filter)}
-       "больше чем"]
-      [:div.item {:class (if (and (= (:filter-type active-col-filter) :numeric)
-                                  (= (:filter-cond active-col-filter) :lt))
-                           "active")
-                  :on-click #(click-lt-filter column active-col-filter)}
-       "меньше чем"]
-      [:div.item {:class (if-not active-col-filter "active")
-                  :on-click #(click-off-filter column)}
-       "отключить"]]]
-
-    [:input {:type "text"
-             :class "filter-input"
-             :disabled (nil? active-col-filter)
-             :style {:text-align "right"}
-             :value (u/value-or-empty-str (:search-str active-col-filter))
-             :on-change #(change-col-filter-search-str column
-                                                       (dom/target-value %))
-             }]]])
+   (case (:field-type column)
+     :numeric (numeric-filter-view column active-col-filter)
+     :text (text-filter-view column active-col-filter))])
 
 
 (rum/defc row-td-view
@@ -355,20 +394,35 @@
    (get row (:field-name column))])
 
 
-(rum/defc row-view
-  [row columns]
-  [:tr
+(defn from-args-state
+  [state index]
+  (as-> state a
+        (:rum/args a)
+        (into [] a)
+        (get a index)))
+
+
+(rum/defcs row-view < {:should-update (fn [old-st new-st]
+                                       (let [old-row (from-args-state old-st 0)
+                                             new-row (from-args-state new-st 0)
+                                             old-sel? (from-args-state old-st 2)
+                                             new-sel? (from-args-state new-st 2)]
+                                         (or (not= old-row new-row)
+                                             (not= old-sel? new-sel?))))}
+  [state row columns selected?]
+  [:tr {:class (if selected? "selected-row" "")
+        :on-click #(select-row (:id row))}
    (map #(rum/with-key (row-td-view row %) (:index %))
         columns)])
 
 
 (rum/defc body-part-view < rum/reactive {:after-render (fn[state]
-                                                         (js/moveBodyScrollUp)
                                                          (notify-loaded)
                                                          state) }
-  [columns rows-cursor]
+  [columns rows-cursor selected-row-id-cursor]
   (println "body-part-view")
-  (let [rows (rum/react rows-cursor)]
+  (let [rows (rum/react rows-cursor)
+        selected-row-id (rum/react selected-row-id-cursor)]
     [:div.table-body-div
      [:table {:cellSpacing 0}
       [:colgroup
@@ -377,7 +431,10 @@
                         }])
             columns)]
       [:tbody
-       (map #(rum/with-key (row-view % columns) (:id %)) rows)]]]))
+       (map #(rum/with-key (row-view %
+                                     columns
+                                     (= selected-row-id (:id %)))
+                           (:id %)) rows)]]]))
 
 
 (rum/defc footer-part-view
@@ -439,7 +496,8 @@
                       (app-cursor :sort-params))
 
     (body-part-view columns
-                    (app-cursor :rows))
+                    (app-cursor :rows)
+                    (app-cursor :selected-row-id))
 
     (footer-part-view columns)]))
 
@@ -454,9 +512,6 @@
                                                          state) }
   [loading-cursor]
   (let [loading? (rum/react loading-cursor)]
-    (println "__________loading-label")
-    (println loading?)
-    (println "__________")
     [:div {:style {:visibility (if loading? "visible" "hidden")}}
      [:div.ui.active.centered.inline.loader
       {:style {:margin-bottom "5px"}}]]))
@@ -465,9 +520,23 @@
 ;;      "zzz"]))
 
 
+(rum/defc text-filter-popup-view
+  []
+  [:div.ui.basic.popup
+   [:div.ui.list
+    [:div.item
+     [:div.ui.checkbox
+      [:input {:type "checkbox" :name "some1"}]
+      [:label {:for "some1"} "Масло 27"]]]
+    [:div.item
+     [:div.ui.checkbox
+      [:input {:type "checkbox" :name "some2"}]
+      [:label {:for "some2"} "Масло 28"]]]
+    ]])
+
 (defn init
   []
-  (let [rand-rows (for [x (range 1000)]
+  (let [rand-rows (for [x (range 300)]
                     (random-row x))]
     (reset! init-rows rand-rows)
     (reset! (rum/cursor-in app-state [:rows]) @init-rows)
@@ -475,6 +544,8 @@
                (.getElementById js/document "loading-div"))
     (rum/mount (mahtable-view app-state)
                (.getElementById js/document "table-div"))
+    (rum/mount (text-filter-popup-view)
+               (.getElementById js/document "textfilterpopup-div"))
     (rum/mount (rows-count-view (app-cursor :rows))
                (.getElementById js/document "rows-count-div"))))
 

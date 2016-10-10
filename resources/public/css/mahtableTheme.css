@@ -114,3 +114,8 @@ td {
   margin: 0px;
   padding: 0px;
 }
+
+.selected-row {
+  background-color: #249FDA;
+  color: White;
+}
