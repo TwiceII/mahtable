@@ -82,6 +82,9 @@
 
                       ;; id выбранной строки
                       :selected-row-id nil
+
+                      ;; показывать ли текстовый фильтр
+                      :show-text-filter? false
                       }))
 
 (defn app-cursor
@@ -308,16 +311,41 @@
 ;;   (println @(rum/cursor-in app-state [:active-col-filters]))
   )
 
+
 (defn show-filter-popup
+  "Показать контекстное меню для добавления записи в категорию"
   [evt]
-  (.popup (.popup (js/$. (.-target evt))
-                  (js-obj "popup" (js/$. ".ui.popup")
-                          "hoverable" true
-                          "on" "manual"
-                          "hideOnScroll" false
-                          "exclusive" true
-                          "position" "bottom left"))
-          "show"))
+  (do
+    (println "show-filter-popup!")
+    (let [top-offset (-> (.-target evt)
+                         (js/$. )
+                         (.offset)
+                         (.-top)
+                         (+ 20)
+                         (str "px"))
+          left-offset (-> (.-target evt)
+                          (js/$. )
+                          (.offset)
+                          (.-left)
+                          (+ 0)
+                          (str "px"))]
+      (.css (js/$. ".text-filter-window") #js {:top top-offset
+                                               :left left-offset}))
+    (reset! (app-cursor :show-text-filter?) true)
+    (println (app-cursor :show-text-filter?))))
+
+
+;; (defn show-filter-popup
+;;   [evt]
+;;   (println "show-filter-popup!"))
+;;   (.popup (.popup (js/$. (.-target evt))
+;;                   (js-obj "popup" (js/$. ".ui.popup")
+;;                           "hoverable" true
+;;                           "on" "manual"
+;;                           "hideOnScroll" false
+;;                           "exclusive" true
+;;                           "position" "bottom left"))
+;;           "show"))
 
 ;;; =======================================
 (rum/defc header-th-view
@@ -511,6 +539,7 @@
                                                          (println "dafaq did-update")
                                                          state) }
   [loading-cursor]
+  (println "loading-cursor: " loading-cursor)
   (let [loading? (rum/react loading-cursor)]
     [:div {:style {:visibility (if loading? "visible" "hidden")}}
      [:div.ui.active.centered.inline.loader
@@ -520,19 +549,26 @@
 ;;      "zzz"]))
 
 
-(rum/defc text-filter-popup-view
-  []
-  [:div.ui.basic.popup
-   [:div.ui.list
-    [:div.item
-     [:div.ui.checkbox
-      [:input {:type "checkbox" :name "some1"}]
-      [:label {:for "some1"} "Масло 27"]]]
-    [:div.item
-     [:div.ui.checkbox
-      [:input {:type "checkbox" :name "some2"}]
-      [:label {:for "some2"} "Масло 28"]]]
-    ]])
+(rum/defc text-filter-popup-view < rum/reactive {:after-render (fn[state]
+                                                                 (println "daf")
+                                                                 (.checkbox (js/$ ".ui.checkbox"))
+                                                                 state)}
+  [show-cursor]
+  (println "show-cursor: " show-cursor)
+  (let [show-text-filter? (rum/react show-cursor)]
+    [:div.text-filter-window
+     {:style {:visibility (if show-text-filter? "visible" "hidden")}}
+     [:div.ui.list
+      [:div.item
+       [:div.ui.checkbox
+        [:input {:type "checkbox" :name "some1"}]
+        [:label "Масло 27"]]]
+      [:div.item
+       [:div.ui.checkbox
+        [:input {:type "checkbox" :name "some2"}]
+        [:label "Масло 28"]]]
+      ]]))
+
 
 (defn init
   []
@@ -544,7 +580,7 @@
                (.getElementById js/document "loading-div"))
     (rum/mount (mahtable-view app-state)
                (.getElementById js/document "table-div"))
-    (rum/mount (text-filter-popup-view)
+    (rum/mount (text-filter-popup-view (app-cursor :show-text-filter?))
                (.getElementById js/document "textfilterpopup-div"))
     (rum/mount (rows-count-view (app-cursor :rows))
                (.getElementById js/document "rows-count-div"))))
