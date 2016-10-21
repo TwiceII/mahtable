@@ -85,6 +85,9 @@
 
                       ;; показывать ли текстовый фильтр
                       :show-text-filter? false
+
+                      ;; показываемые чекбоксы для текст.фильтра
+                      :current-filter-checkboxes nil
                       }))
 
 (defn app-cursor
@@ -335,6 +338,21 @@
     (println (app-cursor :show-text-filter?))))
 
 
+(defn close-text-filter-popup
+  "Закрыть контекстное меню"
+  []
+  (reset! (app-cursor :show-text-filter?) false))
+
+
+(defn current-filter-checkboxes-from-rows
+  []
+  (let [rows @(app-cursor :rows)]
+    (map #(-> {:id (:id %)
+              :name (:brand %)
+              :checked? false})
+           @(app-cursor :rows))
+    ))
+
 ;; (defn show-filter-popup
 ;;   [evt]
 ;;   (println "show-filter-popup!"))
@@ -549,25 +567,64 @@
 ;;      "zzz"]))
 
 
-(rum/defc text-filter-popup-view < rum/reactive {:after-render (fn[state]
-                                                                 (println "daf")
-                                                                 (.checkbox (js/$ ".ui.checkbox"))
-                                                                 state)}
-  [show-cursor]
+(defn filters-on-render
+  [state]
+  (println "daf")
+  (.checkbox (js/$ ".ui.checkbox"))
+  (.checkbox (js/$ ".master.checkbox")
+             (js-obj "onChecked" (fn[_]
+                                   (this-as
+                                     this
+                                     (println "checked master")
+                                     (-> ".list.actual-items"
+                                         js/$
+                                         (.find ".checkbox")
+                                         (.checkbox "check"))
+                                     ))
+                     "onUnchecked" (fn[_]
+                                   (this-as
+                                     this
+                                     (println "unchecked master")
+                                     (-> ".list.actual-items"
+                                         js/$
+                                         (.find ".checkbox")
+                                         (.checkbox "uncheck"))
+                                     ))
+                     ))
+  (.resizable (js/$ ".text-filter-window")
+              (js-obj "minHeight" 200
+                      "minWidth" 200))
+  state)
+
+
+(rum/defc text-filter-popup-view  < rum/reactive {:after-render filters-on-render}
+  "Вьюшка для фильтра с галочками"
+  [show-cursor checkboxes-cursor]
   (println "show-cursor: " show-cursor)
-  (let [show-text-filter? (rum/react show-cursor)]
+  (let [show-text-filter? (rum/react show-cursor)
+        checkboxes (rum/react checkboxes-cursor)]
     [:div.text-filter-window
      {:style {:visibility (if show-text-filter? "visible" "hidden")}}
-     [:div.ui.list
-      [:div.item
-       [:div.ui.checkbox
-        [:input {:type "checkbox" :name "some1"}]
-        [:label "Масло 27"]]]
-      [:div.item
-       [:div.ui.checkbox
-        [:input {:type "checkbox" :name "some2"}]
-        [:label "Масло 28"]]]
-      ]]))
+     ;; список
+     [:div.item-list
+      [:div.ui.list
+       [:div.item
+        [:div.ui.master.checkbox
+         [:input {:type "checkbox"} ]
+         [:label "Выбрать все"]]]]
+      [:div.ui.divider]
+      [:div.ui.list.actual-items
+       (map #(-> [:div.item
+                 [:div.ui.checkbox {:class (if (:checked? %) "checked" "")}
+                  [:input {:type "checkbox" :name (:id %) :checked (:checked? %)}]
+                  [:label (:name %)]]])
+            checkboxes)
+       ]]
+     ;; кнопки
+     [:div.bottom-buttons
+      [:div.ui.tiny.button "Ок"]
+      [:div.ui.tiny.button {:on-click #(close-text-filter-popup)} "Отмена"]]
+     ]))
 
 
 (defn init
@@ -576,11 +633,13 @@
                     (random-row x))]
     (reset! init-rows rand-rows)
     (reset! (rum/cursor-in app-state [:rows]) @init-rows)
+    (reset! (app-cursor :current-filter-checkboxes) (current-filter-checkboxes-from-rows))
     (rum/mount (loading-label-view (app-cursor :loading?))
                (.getElementById js/document "loading-div"))
     (rum/mount (mahtable-view app-state)
                (.getElementById js/document "table-div"))
-    (rum/mount (text-filter-popup-view (app-cursor :show-text-filter?))
+    (rum/mount (text-filter-popup-view (app-cursor :show-text-filter?)
+                                       (app-cursor :current-filter-checkboxes))
                (.getElementById js/document "textfilterpopup-div"))
     (rum/mount (rows-count-view (app-cursor :rows))
                (.getElementById js/document "rows-count-div"))))
