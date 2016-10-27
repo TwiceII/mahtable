@@ -16,14 +16,18 @@
   [column]
   (case (:field-type column)
     :text {:col-index (:index column)
-           :field-name (:field-name column)
+           :field-name (:field-name column) ; поиск по строке
            :filter-type :text
+           :chosen-elements nil ; выбранные элементы (чекбоксы)
            :search-str nil}
     :numeric {:col-index (:index column)
               :field-name (:field-name column)
               :filter-type :numeric
               :search-str nil
               :filter-cond nil}))
+
+;;; список рандомных брендов
+(def brands-list ["масло" "корнишоны" "vitaland" "еще бренд" "magnum"])
 
 ;;; настройки столбцов
 (def columns [{:index 1
@@ -57,7 +61,9 @@
               {:index 8
                :name "% от общей прибыли" :width 15
                :field-name :salesPercent
-               :field-type :numeric }])
+               :field-type :numeric
+               :field-format :percent
+               :no-total? true}])
 
 ;;; изначальный список строк
 (def init-rows (atom []))
@@ -86,7 +92,13 @@
                       ;; показывать ли текстовый фильтр
                       :show-text-filter? false
 
-                      ;; показываемые чекбоксы для текст.фильтра (должны быть в векторе!)
+                      ;; чекбоксы для текст.фильтров столбцов
+                      :filter-checkboxes nil
+
+                      ;;; ----------------------
+                      ;;; настройки для чекбокс-текстового фильтра
+
+                      ;; показываемые чекбоксы (должны быть в векторе!)
                       :current-filter-checkboxes nil
                       ;; пример мэпа для чекбокса:
                       ;; [{:index 1
@@ -96,6 +108,10 @@
                       :select-all-checkbox {:name "Выбрать все"
                                             :checked? true
                                             :indeterminate? false}
+                      ;; для какого столбца в данный момент выбираем
+                      :current-checkbox-filter-column nil
+                      ;;; ----------------------
+
                       }))
 
 (defn app-cursor
@@ -189,11 +205,18 @@
 (defn filter-rows-text
   "Отфильтровать строки по тексту"
   [rows field-name value]
-  (filter #(re-find (re-pattern value) (get % field-name)) rows))
+  (->> rows
+       (filter (fn [r] (re-find (re-pattern value) (get r field-name))))
+;;        ;; если указаны элементы чекбокса
+;;        (#(if (not (u/nil-or-empty? chosen-elems))
+;;            (filter (fn [r] (some (fn[c](= c (get r field-name))) chosen-elems)) %)
+;;            %))
+       ))
 
 
 (defn get-filtered-rows
-  "Получить отфильтрованные строки из общего списка строк и параметров"
+  "Получить отфильтрованные строки из общего списка строк и параметров
+  (БЕЗ учета чекбоксов в фильтрах)"
   [init-rows filter-params]
   (if (u/nil-or-empty? filter-params)
     init-rows
@@ -212,16 +235,72 @@
                          %))))
                init-rows
                filter-params)))
+
+
+(defn get-chosen-from-filtered
+  "Получить выбранные (чекнутые) строки из отфильтрованных
+  (т.е. учитываем чекбоксы)"
+  [filtered-rows filter-params]
+  (if (u/nil-or-empty? filter-params)
+    filtered-rows
+    (reduce-kv (fn [rows flt-index flt-param]
+                 (->> rows
+                      ;; если указаны элементы чекбокса
+                      (#(if (not (u/nil-or-empty? (:chosen-elements flt-param)))
+                          (filter (fn [r] (some (fn[c](= c (get r (:field-name flt-param))))
+                                                (:chosen-elements flt-param))) %)
+                          %))))
+               filtered-rows
+               filter-params)))
+
 ;;; -------------------------------------------
 
+
+(defn init-checkboxes-of-filter-param
+  "Получить начальные чекбоксы после фильтрации"
+  [rows column col-filter-param]
+  (->> rows
+       (map #(get % (:field-name column)))
+       distinct ; убираем повт.зн-ия
+       (map-indexed (fn [i r]
+                      {:index i
+                       :name r
+                       ;; щелкнуто либо если список выбр.элементов пустой,
+                       ;; либо если есть этот элемент в списке
+                       :checked? (boolean (or (u/nil-or-empty? (:chosen-elements col-filter-param))
+                                              (some (fn[c] (= r c))
+                                                    (:chosen-elements col-filter-param))))})) ; получаем зн-ия
+       (sort-by :name <) ; сортируем
+       (into [])))
+
+
+(defn reset-checkboxes-for-columns!
+  "Обновить значения чекбоксов для фильтров столбцов"
+  [rows filter-params]
+  (reset! (app-cursor :filter-checkboxes)
+          (reduce (fn [m col]
+                    (assoc m (:index col) (init-checkboxes-of-filter-param
+                                            rows
+                                            col
+                                            (get filter-params (:index col))
+                                            )))
+                  {}
+                  (filter #(= (:field-type %) :text) @(app-cursor :columns)))))
+
+
 (defn filter-rows!
+  "Отфильтровать строки
+  (и получить значения чекбоксов для текст.фильтров)"
   [filter-params]
-  (println "filter-rows!")
-  (println filter-params)
   (let [init-rows @init-rows
-        filtered-rows (get-filtered-rows init-rows filter-params)]
-    (when (= filtered-rows init-rows) (loading-off!))
-    (reset! (rum/cursor-in app-state [:rows]) filtered-rows)
+        filtered-rows (get-filtered-rows init-rows filter-params)
+        filtered-and-chosen-rows (get-chosen-from-filtered filtered-rows filter-params)]
+    ;; получаем значения чекбоксов для фильтров столбцов
+    (reset-checkboxes-for-columns! filtered-rows filter-params)
+    ;; выключаем загрузку, если кол-во строк не изменилось
+    (when (= filtered-and-chosen-rows init-rows) (loading-off!))
+    ;; ставим новые данные
+    (reset! (app-cursor :rows) filtered-and-chosen-rows)
     ))
 
 
@@ -241,11 +320,13 @@
 ;;              (loading-off!))
            )))
 
+(declare close-text-filter-popup)
+
 (defn start-redrawing-table
   [redraw-type]
   (loading-on!)
   (deselect-row)
-  (reset! (app-cursor :show-text-filter?) false)
+  (close-text-filter-popup)
   (js/moveBodyScrollUp)
   (am/go (a/>! redraw-table-ch redraw-type)))
 
@@ -261,28 +342,14 @@
 (add-watch (rum/cursor-in app-state [:active-col-filters])
            :filters-watcher
            (fn [k a old-s new-s]
-             (println ":filters-watcher")
-             (println new-s)
-             ;; если есть какое-то значение для числового поиска
-;;              (when (or (some #(and (not (nil? (get-in % [1 :search-str])))
-;;                                    (= :numeric (get-in % [1 :filter-type])))
-;;                              new-s)
-;;                        ;; если обнулили
-;;                        (u/nil-or-empty? new-s))
                (start-redrawing-table :filter-redraw)
-;;              )
-;;                ;; фильтруем
-;;                (filter-rows! new-s)
-;;                ;; заодно сортируем
-;;                (sort-rows! @(rum/cursor-in app-state [:sort-params]))
-;;                ;(loading-off!)
              ))
 
 
 (defn random-row
   [row-number]
   {:id row-number
-   :brand (str "масло " (rand-int 100))
+   :brand (u/random-from-coll brands-list)
    :good (str "масло Sunar" (rand-int 100))
    :salesSum (rand-int 10000000)
    :salesAmount (rand-int 10000)
@@ -329,25 +396,19 @@
 
 
 (defn click-off-filter
-  "Отключить фильтр для столбца"
+  "Отключить фильтр для столбца (числового)"
   [column]
   (swap! (rum/cursor-in app-state [:active-col-filters])
-         #(dissoc % (:index column)))
-;;   (println @(rum/cursor-in app-state [:active-col-filters]))
-  )
+         #(dissoc % (:index column))))
 
 
 (defn change-numeric-filter-search-str
   [column active-col-filter value]
-  (println "change-NUM-filter-search-str " value)
   (swap! (rum/cursor-in app-state [:active-col-filters])
-         #(assoc-in % [(:index column) :search-str] value))
-;;   (println @(rum/cursor-in app-state [:active-col-filters]))
-  )
+         #(assoc-in % [(:index column) :search-str] value)))
 
 (defn change-text-filter-search-str
   [column active-col-filter value]
-  (println "change-TEXT-filter-search-str " value)
   (swap! (rum/cursor-in app-state [:active-col-filters])
          ;; если уже был фильтр на эту колонну
          #(if active-col-filter
@@ -356,28 +417,40 @@
             ;; иначе создаем первоначальную инфу по фильтру
             (assoc % (:index column)
               (assoc (column->init-col-filter column)
-                                     :search-str value))))
-;;   (println @(rum/cursor-in app-state [:active-col-filters]))
-  )
+                                     :search-str value)))))
 
 
-(defn current-filter-checkboxes-to-column
-  "Получить список чекбоксов для фильтра для конкр.столбца"
-  [column]
-  (let [c-rows (get-filtered-rows @init-rows
-                                  @(app-cursor :active-col-filters))]
-    (into [] (map-indexed (fn[i r]
-                            {:index i
-                             :name (get r (:field-name column))
-                             :checked? true})
-                         c-rows))))
+(defn examine-checkboxes-and-select-all
+  "Проверка чекбокса 'Выбрать все' относительно остальных чекбоксов"
+  [checkboxes]
+  ;; если все выделены
+  (when-not (some #(not (:checked? %)) checkboxes)
+    (swap! (app-cursor :select-all-checkbox) #(-> %
+                                                  (assoc :checked? true)
+                                                  (assoc :indeterminate? false))))
+  ;; если все отключены
+  (when-not (some #(:checked? %) checkboxes)
+    (swap! (app-cursor :select-all-checkbox) #(-> %
+                                                  (assoc :checked? false)
+                                                  (assoc :indeterminate? false))))
+  ;; если часть включены, а часть нет
+  (when (and (some #(:checked? %) checkboxes)
+             (some #(not (:checked? %)) checkboxes))
+    (swap! (app-cursor :select-all-checkbox) #(assoc % :indeterminate? true))))
+
+
+;;; при изменении списка чекбоксов
+(add-watch (app-cursor :current-filter-checkboxes)
+           :checkbox-list-watcher
+           (fn [k a old-s new-s]
+             (examine-checkboxes-and-select-all new-s)))
+
 
 
 (defn show-filter-popup
   "Показать контекстное меню для добавления записи в категорию"
   [evt column]
   (do
-    (println "show-filter-popup!")
     (let [top-offset (-> (.-target evt)
                          (js/$. )
                          (.offset)
@@ -392,12 +465,20 @@
                           (str "px"))]
       (.css (js/$. ".text-filter-window") #js {:top top-offset
                                                :left left-offset}))
+    ;; ставим текущий проверяемый столбец
+    (reset! (app-cursor :current-checkbox-filter-column) column)
     ;; обновляем список чекбоксов для этого столбца
-    (reset! (app-cursor :current-filter-checkboxes) (current-filter-checkboxes-to-column column))
+    (reset! (app-cursor :current-filter-checkboxes)
+            (get @(app-cursor :filter-checkboxes) (:index column)))
     ;; ставим признак, чтобы показывать попап
     (reset! (app-cursor :show-text-filter?) true)
     (println (app-cursor :show-text-filter?))))
 
+
+;; (defn assoc-in-or-init-then-assoc
+;;   [m k v init-val]
+;;   (if (contains? m k)
+;;     (assoc-in m
 
 (defn close-text-filter-popup
   "Закрыть контекстное меню"
@@ -425,42 +506,37 @@
 (defn click-filter-checkbox
   "Клик по чекбоксу из списка"
   [checkbox]
-  ;; находим в списке и меняем щелкнутый чекбокс
-  (swap! (app-cursor :current-filter-checkboxes)
-         #(assoc-in % [(:index checkbox) :checked?] (not (:checked? checkbox))))
-  ;; после этого делаем остальные проверки
   (let [checkboxes @(app-cursor :current-filter-checkboxes)]
-    ;; если все выделены
-    (when-not (some #(not (:checked? %)) checkboxes)
-      (swap! (app-cursor :select-all-checkbox) #(-> %
-                                                    (assoc :checked? true)
-                                                    (assoc :indeterminate? false))))
-    ;; если все отключены
-    (when-not (some #(:checked? %) checkboxes)
-      (swap! (app-cursor :select-all-checkbox) #(-> %
-                                                    (assoc :checked? false)
-                                                    (assoc :indeterminate? false))))
-    ;; если часть включены, а часть нет
-    (when (and (some #(:checked? %) checkboxes)
-               (some #(not (:checked? %)) checkboxes))
-      (swap! (app-cursor :select-all-checkbox) #(assoc % :indeterminate? true)))
-    ))
+    ;; находим в списке и меняем щелкнутый чекбокс
+    (swap! (app-cursor :current-filter-checkboxes)
+           (fn[at](assoc-in at [(u/index-of-pred #(= (:index %) (:index checkbox))
+                                                 checkboxes) :checked?] (not (:checked? checkbox)))))))
 
 
+(defn click-ok-checkbox-filters
+  "При щелчке по 'Ок' в чекбоксовом фильтре"
+  []
+  (let [column @(app-cursor :current-checkbox-filter-column)
+        all-current-checkboxes @(app-cursor :current-filter-checkboxes)
+        chosen-checkboxes (->> all-current-checkboxes
+                               (filter #(= (:checked? %) true))
+                               ;; если выбраны все - значит не выбрано ничего, по сути
+                               (#(if (= (count %) (count all-current-checkboxes))
+                                   nil
+                                   %)))]
+    (swap! (app-cursor :active-col-filters)
+           ;; если такой фильтр на текст уже есть
+           #(if (contains? % (:index column))
+              (assoc-in % [(:index column) :chosen-elements]
+                        (map :name chosen-checkboxes))
+              ;; иначе создаем первоначальную инфу по фильтру
+              (assoc % (:index column)
+                (assoc (column->init-col-filter column)
+                  :chosen-elements (map :name chosen-checkboxes)))))))
 
-;; (defn show-filter-popup
-;;   [evt]
-;;   (println "show-filter-popup!"))
-;;   (.popup (.popup (js/$. (.-target evt))
-;;                   (js-obj "popup" (js/$. ".ui.popup")
-;;                           "hoverable" true
-;;                           "on" "manual"
-;;                           "hideOnScroll" false
-;;                           "exclusive" true
-;;                           "position" "bottom left"))
-;;           "show"))
 
 ;;; =======================================
+;;; Views
 (rum/defc header-th-view
   [column sort? sort-type]
   [:th
@@ -471,8 +547,7 @@
                       (if (= sort-type :asc) "ascending " "descending ")
                       (if (= (:field-type column)
                              :numeric) "numeric" "alphabet"))}])
-   (:name column)
-   ])
+   (:name column)])
 
 
 (rum/defc numeric-filter-view
@@ -516,7 +591,9 @@
   [:div.ui.fluid.labeled.input
    [:div.ui.icon.label.filter-btn
     {:on-click #(show-filter-popup % column)}
-    [:i.filter.icon]]
+    (if (not (u/nil-or-empty? (:chosen-elements active-col-filter)))
+      [:i.check.square.icon]
+      [:i.filter.icon])]
    [:input {:type "text"
             :class "filter-input"
             :value (u/value-or-empty-str (:search-str active-col-filter))
@@ -541,7 +618,13 @@
   [:td
    {:style {:text-align (if (= (:field-type column) :numeric)
                           "right" "left")}}
-   (get row (:field-name column))])
+   (let [v (get row (:field-name column))]
+     (case (:field-type column)
+       :numeric (if (:field-format column)
+                  (case (:field-format column)
+                    :percent (str (u/money-str-with-zero v) "%"))
+                  (u/money-str-with-zero v))
+       :text v))])
 
 
 (defn from-args-state
@@ -590,24 +673,43 @@
        [:div.ui.center.aligned.basic.segment "Не найдено"])]))
 
 
-(rum/defc footer-part-view
-  [columns]
-  [:div.table-footer-div
-   [:table {:cellSpacing 0}
-    [:colgroup
-     (map #(-> [:col {:style {:width (str (:width %) "%")}
-                      :key (:index %)}])
-          columns)]
-    [:tbody
-     [:tr
-      [:td "Итого"]
-      [:td]
-      [:td 0]
-      [:td 0]
-      [:td]
-      [:td]
-      [:td]
-      [:td]]]]])
+(defn summ-by-field
+  "Получить сумму из элементов по полю"
+  [rows field-name]
+  (reduce (fn [s r] (+ s (get r field-name)))
+          0 rows))
+
+
+(rum/defc footer-part-view < rum/reactive
+  "Итого в футере таблицы"
+  [columns rows-cursor]
+  (let [rows (rum/react rows-cursor)]
+    [:div.table-footer-div
+     [:table {:cellSpacing 0}
+      [:colgroup
+       (map #(-> [:col {:style {:width (str (:width %) "%")}
+                        :key (:index %)}])
+            columns)]
+      [:tbody
+       [:tr
+        (map #(->
+                [:td {:style {:font-weight "bold"
+                              :text-align (if (= (:field-type %) :numeric)
+                                            "right" "left")}}
+                 (if (and (= (:field-type %) :numeric)
+                          (not (:no-total? %)))
+                   (u/money-str-with-zero (summ-by-field rows (:field-name %)))
+                   "")])
+             columns)]]]]))
+
+;;         [:td "Итого"]
+;;         [:td]
+;;         [:td 0]
+;;         [:td 0]
+;;         [:td]
+;;         [:td]
+;;         [:td]
+;;         [:td]]]]])
 
 
 (rum/defc header-part-view < rum/reactive
@@ -653,7 +755,8 @@
                     (app-cursor :selected-row-id)
                     (app-cursor :loading?))
 
-    (footer-part-view columns)]))
+    (footer-part-view columns
+                      (app-cursor :rows))]))
 
 
 (rum/defc rows-count-view < rum/reactive
@@ -722,23 +825,28 @@
         select-all-checkbox (rum/react select-all-checkbox-cursor)]
     [:div.text-filter-window
      {:style {:visibility (if show-text-filter? "visible" "hidden")}}
-     ;; список с чекбоксами
-     [:div.item-list
-      [:div.ui.list
-       [:div.item
-        ;; "выбрать все" чекбокс
-        (select-all-checkbox-view select-all-checkbox)]]
-      [:div.ui.divider]
-      ;; остальные варианты
-      [:div.ui.list.actual-items
-       (map #(rum/with-key
-               (filter-checkbox-view %) (:index %))
-            checkboxes)
-       ]]
-     ;; кнопки
-     [:div.bottom-buttons
-      [:div.ui.tiny.button "Ок"]
-      [:div.ui.tiny.button {:on-click #(close-text-filter-popup)} "Отмена"]]
+     (if (not (u/nil-or-empty? checkboxes))
+       [:div.show-checkboxes
+        ;; список с чекбоксами
+        [:div.item-list
+         [:div.ui.list
+          [:div.item
+           ;; "выбрать все" чекбокс
+           (select-all-checkbox-view select-all-checkbox)]]
+         [:div.ui.divider]
+         ;; остальные варианты
+         [:div.ui.list.actual-items
+          (map #(rum/with-key
+                  (filter-checkbox-view %) (:index %))
+               checkboxes)
+          ]]
+        ;; кнопки
+        [:div.bottom-buttons
+         [:div.ui.tiny.button {:on-click #(click-ok-checkbox-filters)} "Ок"]
+         [:div.ui.tiny.button {:on-click #(close-text-filter-popup)} "Отмена"]]]
+       [:div.not-found
+        [:div "Не найдено"]
+        [:div.ui.tiny.button {:on-click #(close-text-filter-popup)} "Закрыть"]])
      ]))
 
 
@@ -748,6 +856,8 @@
                     (random-row x))]
     (reset! init-rows rand-rows)
     (reset! (rum/cursor-in app-state [:rows]) @init-rows)
+    (reset-checkboxes-for-columns! @init-rows @(app-cursor :active-col-filters))
+
     ;(reset! (app-cursor :current-filter-checkboxes) (current-filter-checkboxes-from-rows))
     (rum/mount (loading-label-view (app-cursor :loading?))
                (.getElementById js/document "loading-div"))
